@@ -1,23 +1,20 @@
 """
 ExplainIt3D — Interactive 3D Model Viewer with Part Annotations
-
-Rotate a 3D model in the browser, tap the labeled dots on it, and see
-detailed information about that part (material, function, notes).
-
-Everything here is plain Python. Streamlit turns it into a web page.
+Search bar added on top of your existing catalog (including your laptop).
 """
 
 import streamlit as st
 import streamlit_3d as sd
 
 # ---------------------------------------------------------------
-# 1. PICK A MODEL
+# 1. MODEL CATALOG — add new entries here (just a name + URL/file,
+#    no need to touch anything else in this file).
 # ---------------------------------------------------------------
-SAMPLE_MODELS = {
+MODEL_CATALOG = {
     "My Laptop": "laptop.glb",
-    "Engine": "https://alteirac.com/models/engine/scene.gltf",
-    "Helmet": "https://alteirac.com/models/helmet/scene.gltf",
-    "Turbine": "https://alteirac.com/models/turbine/scene.gltf",
+    "Engine":    "https://alteirac.com/models/engine/scene.gltf",
+    "Helmet":    "https://alteirac.com/models/helmet/scene.gltf",
+    "Turbine":   "https://alteirac.com/models/turbine/scene.gltf",
 }
 
 # ---------------------------------------------------------------
@@ -42,7 +39,7 @@ PART_INFO = {
     "Engine Block": {
         "material": "Cast Aluminum Alloy",
         "function": "Houses the cylinders and core moving components.",
-        "notes": "Chosen for its strength-to-weight ratio and heat dissipation.",
+        "notes": "Chosen for strength-to-weight ratio and heat dissipation.",
     },
     "Exhaust Manifold": {
         "material": "Stainless Steel",
@@ -57,61 +54,68 @@ PART_INFO = {
 }
 
 ENGINE_HOTSPOTS = [
-    {
-        "description": "Engine Block",
-        "data-position": {"x": 0.05, "y": 0.35, "z": 0.15},
-        "data-normal": {"x": 0.0, "y": 0.0, "z": 1.0},
-    },
-    {
-        "description": "Exhaust Manifold",
-        "data-position": {"x": -0.25, "y": 0.2, "z": 0.05},
-        "data-normal": {"x": -1.0, "y": 0.0, "z": 0.0},
-    },
-    {
-        "description": "Intake Valve",
-        "data-position": {"x": 0.15, "y": 0.45, "z": -0.1},
-        "data-normal": {"x": 0.0, "y": 1.0, "z": 0.0},
-    },
+    {"description": "Engine Block",
+     "data-position": {"x": 0.05, "y": 0.35, "z": 0.15},
+     "data-normal": {"x": 0.0, "y": 0.0, "z": 1.0}},
+    {"description": "Exhaust Manifold",
+     "data-position": {"x": -0.25, "y": 0.2, "z": 0.05},
+     "data-normal": {"x": -1.0, "y": 0.0, "z": 0.0}},
+    {"description": "Intake Valve",
+     "data-position": {"x": 0.15, "y": 0.45, "z": -0.1},
+     "data-normal": {"x": 0.0, "y": 1.0, "z": 0.0}},
 ]
+
+# Add real hotspot coordinates for your laptop here once you place them
+# (right-click on the model in the viewer to get x/y/z, per your README).
+LAPTOP_HOTSPOTS = []
 
 # ---------------------------------------------------------------
 # 3. PAGE SETUP
 # ---------------------------------------------------------------
 st.set_page_config(page_title="ExplainIt3D", layout="wide")
-
 st.title("🔍 ExplainIt3D")
-st.caption("Rotate the model, tap a labeled point, and see the details.")
-
-model_choice = st.selectbox("Model:", list(SAMPLE_MODELS.keys()), index=0)
-model_url = SAMPLE_MODELS[model_choice]
-
-hotspots = ENGINE_HOTSPOTS if model_choice == "Engine" else []
-
-if model_choice == "My Laptop":
-    st.info(
-        "This is your laptop model — right-click anywhere on it to drop "
-        "a hotspot pin (see README for the full steps), then match its "
-        "label to an entry in PART_INFO in app.py."
-    )
-elif model_choice != "Engine":
-    st.info(
-        "Hotspots are only set up for the Engine sample right now — "
-        "switch back to Engine to see tap-for-info in action, or add "
-        "hotspot coordinates for the other models yourself."
-    )
+st.caption("Search for a model, rotate it, tap a labeled point to see details.")
 
 # ---------------------------------------------------------------
-# 4. RENDER THE 3D MODEL WITH HOTSPOTS
+# 4. SEARCH BAR — filters the catalog above
+# ---------------------------------------------------------------
+search_term = st.text_input("Search models:", placeholder="e.g. laptop, engine, helmet...")
+
+if search_term:
+    matches = {name: url for name, url in MODEL_CATALOG.items()
+               if search_term.lower() in name.lower()}
+else:
+    matches = MODEL_CATALOG
+
+if not matches:
+    st.warning("No matching model in the catalog yet. Add its entry to MODEL_CATALOG in app.py.")
+    st.stop()
+
+model_choice = st.selectbox("Pick a model:", list(matches.keys()))
+model_url = matches[model_choice]
+
+if model_choice == "Engine":
+    hotspots = ENGINE_HOTSPOTS
+elif model_choice == "My Laptop":
+    hotspots = LAPTOP_HOTSPOTS
+    if not hotspots:
+        st.info("Right-click on the laptop model to drop hotspot pins, then add "
+                 "their coordinates to LAPTOP_HOTSPOTS in app.py.")
+else:
+    hotspots = []
+    st.info("Hotspots aren't mapped for this model yet — add coordinates the same way.")
+
+# ---------------------------------------------------------------
+# 5. RENDER MODEL
 # ---------------------------------------------------------------
 clicked = sd.streamlit_3d(model=model_url, points=hotspots, height=600)
 
 # ---------------------------------------------------------------
-# 5. SHOW INFO WHEN A HOTSPOT IS TAPPED
+# 6. SHOW INFO WHEN A HOTSPOT IS TAPPED
 # ---------------------------------------------------------------
 if clicked is not None and clicked.get("action") == "CLICK":
     part_name = clicked.get("description")
     info = PART_INFO.get(part_name)
-
     st.divider()
     if info:
         st.subheader(f"📌 {part_name}")
