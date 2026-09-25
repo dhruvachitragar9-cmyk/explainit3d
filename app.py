@@ -13,13 +13,8 @@ import streamlit_3d as sd
 # ---------------------------------------------------------------
 # 1. PICK A MODEL
 # ---------------------------------------------------------------
-# These are free sample 3D models (.gltf) that come bundled with the
-# streamlit-3d package's demo hosting, so you can see everything working
-# right away. Later, swap this for your own prototype's .glb/.gltf file
-# (you'll get one by 3D-scanning your object or modeling it in
-# Blender/Fusion 360, then hosting the file somewhere reachable by URL,
-# or loading it locally — see the README for that step).
 SAMPLE_MODELS = {
+    "My Laptop": "laptop.glb",
     "Engine": "https://alteirac.com/models/engine/scene.gltf",
     "Helmet": "https://alteirac.com/models/helmet/scene.gltf",
     "Turbine": "https://alteirac.com/models/turbine/scene.gltf",
@@ -28,11 +23,22 @@ SAMPLE_MODELS = {
 # ---------------------------------------------------------------
 # 2. YOUR PART DATA
 # ---------------------------------------------------------------
-# This is the "database" for the project. Each entry is one part of
-# the object: a short label (must match the hotspot description
-# below), plus whatever detail you want to show when it's tapped.
-# This is the part you'll customize the most for your real prototype.
 PART_INFO = {
+    "Screen": {
+        "material": "LCD panel with glass/plastic casing",
+        "function": "Displays visual output to the user.",
+        "notes": "Fill in the real details for your laptop here.",
+    },
+    "Keyboard": {
+        "material": "Plastic keys over a membrane/scissor mechanism",
+        "function": "Primary text input device.",
+        "notes": "Fill in the real details for your laptop here.",
+    },
+    "Trackpad": {
+        "material": "Glass or plastic surface over touch sensors",
+        "function": "Cursor control and gestures.",
+        "notes": "Fill in the real details for your laptop here.",
+    },
     "Engine Block": {
         "material": "Cast Aluminum Alloy",
         "function": "Houses the cylinders and core moving components.",
@@ -50,10 +56,6 @@ PART_INFO = {
     },
 }
 
-# Hotspot positions on the "Engine" sample model (x, y, z coordinates
-# on the model's surface, and the surface normal direction). These
-# were placed using the package's built-in editor. When you swap in
-# your own model, you'll re-place these — see the README.
 ENGINE_HOTSPOTS = [
     {
         "description": "Engine Block",
@@ -83,10 +85,15 @@ st.caption("Rotate the model, tap a labeled point, and see the details.")
 model_choice = st.selectbox("Model:", list(SAMPLE_MODELS.keys()), index=0)
 model_url = SAMPLE_MODELS[model_choice]
 
-# For now, hotspots are only wired up for the "Engine" sample.
 hotspots = ENGINE_HOTSPOTS if model_choice == "Engine" else []
 
-if model_choice != "Engine":
+if model_choice == "My Laptop":
+    st.info(
+        "This is your laptop model — right-click anywhere on it to drop "
+        "a hotspot pin (see README for the full steps), then match its "
+        "label to an entry in PART_INFO in app.py."
+    )
+elif model_choice != "Engine":
     st.info(
         "Hotspots are only set up for the Engine sample right now — "
         "switch back to Engine to see tap-for-info in action, or add "
