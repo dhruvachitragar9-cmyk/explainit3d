@@ -91,14 +91,40 @@ st.set_page_config(page_title="ExplainIt3D", layout="wide")
 st.title("🔍 ExplainIt3D")
 st.caption("Rotate the model, tap a labeled point, and see the details.")
 
-model_choice = st.selectbox("Model:", list(SAMPLE_MODELS.keys()), index=0)
-model_url = SAMPLE_MODELS[model_choice]
-parts = MODEL_DATA.get(model_choice, {})
+uploaded_file = st.file_uploader(
+    "Or upload your own .glb file to preview it (temporary — not saved permanently)",
+    type=["glb"],
+)
+
+if uploaded_file is not None:
+    import base64
+    file_bytes = uploaded_file.getvalue()
+    b64 = base64.b64encode(file_bytes).decode("utf-8")
+    model_url = f"data:model/gltf-binary;base64,{b64}"
+    model_choice = "Uploaded File"
+    st.caption(f"Previewing: {uploaded_file.name} ({len(file_bytes) / 1_000_000:.1f} MB)")
+else:
+    model_choice = st.selectbox("Model:", list(SAMPLE_MODELS.keys()), index=0)
+    model_url = SAMPLE_MODELS[model_choice]
+
+# User-added hotspots are kept here so you don't have to touch the
+# code to add one — they last as long as the app is running.
+if "custom_hotspots" not in st.session_state:
+    st.session_state.custom_hotspots = {}
+st.session_state.custom_hotspots.setdefault(model_choice, {})
+
+built_in = MODEL_DATA.get(model_choice, {})
+custom = st.session_state.custom_hotspots[model_choice]
+parts = {**built_in, **custom}
+
+find_mode = st.checkbox(
+    "🎯 Placement mode — click the model to get coordinates for a new/moved hotspot"
+)
 
 if not parts:
     st.info(
-        "No hotspots are set up for this model yet — add entries to "
-        "MODEL_DATA in app.py."
+        "No hotspots are set up for this model yet — add one below, or "
+        "add entries to MODEL_DATA in app.py."
     )
 
 # ---------------------------------------------------------------
@@ -112,11 +138,21 @@ for name, data in parts.items():
         f'data-name="{name}" onclick="showInfo(this)"></button>\n'
     )
 
-# The part details, ready to drop straight into the page's JavaScript
-info_json = json.dumps(
-    {name: {"material": d["material"], "function": d["function"], "notes": d["notes"]}
-     for name, d in parts.items()}
-)
+# The part details, ready to drop straight into the page's JavaScript.
+# Built-in parts have material/function/notes; custom ones added via
+# the form below just have a single free-text explanation — both get
+# turned into one ready-to-show HTML snippet here.
+info_data = {}
+for name, d in parts.items():
+    if "explanation" in d:
+        info_data[name] = d["explanation"].replace("\n", "<br>")
+    else:
+        info_data[name] = (
+            f"<b>Material:</b> {d['material']}<br>"
+            f"<b>Function:</b> {d['function']}<br>"
+            f"<b>Notes:</b> {d['notes']}"
+        )
+info_json = json.dumps(info_data)
 
 # ---------------------------------------------------------------
 # 5. THE FULL EMBEDDED PAGE (model-viewer + auto-rotate + hotspots)
@@ -127,7 +163,7 @@ html = f"""
   body {{ margin: 0; font-family: sans-serif; }}
   model-viewer {{
     width: 100%;
-    height: 480px;
+    height: 420px;
     background-color: #fafafa;
     border-radius: 8px;
   }}
@@ -153,9 +189,21 @@ html = f"""
     min-height: 90px;
   }}
   #info-box h3 {{ margin: 0 0 8px 0; }}
+  #coord-box {{
+    display: none;
+    margin-top: 14px;
+    padding: 16px 20px;
+    border-radius: 8px;
+    background: #2d1e30;
+    color: #f0e6ff;
+    font-size: 14px;
+    font-family: monospace;
+    white-space: pre-wrap;
+  }}
 </style>
 
 <model-viewer
+  id="mv"
   src="{model_url}"
   camera-controls
   auto-rotate
@@ -163,28 +211,94 @@ html = f"""
   shadow-intensity="1"
   exposure="1"
   environment-image="neutral"
+  camera-orbit="auto auto 65%"
+  interaction-prompt="none"
 >
   {hotspot_html}
 </model-viewer>
 
 <div id="info-box"></div>
+<div id="coord-box"></div>
 
 <script>
   const partInfo = {info_json};
+  const findMode = {str(find_mode).lower()};
 
   function showInfo(el) {{
     const name = el.getAttribute('data-name');
-    const info = partInfo[name];
+    const html = partInfo[name];
     const box = document.getElementById('info-box');
-    if (!info) return;
+    if (!html) return;
     box.style.display = 'block';
-    box.innerHTML =
-      '<h3>📌 ' + name + '</h3>' +
-      '<b>Material:</b> ' + info.material + '<br>' +
-      '<b>Function:</b> ' + info.function + '<br>' +
-      '<b>Notes:</b> ' + info.notes;
+    box.innerHTML = '<h3>📌 ' + name + '</h3>' + html;
+  }}
+
+  if (findMode) {{
+    const mv = document.getElementById('mv');
+    mv.addEventListener('click', (event) => {{
+      const rect = mv.getBoundingClientRect();
+      const hit = mv.positionAndNormalFromPoint(
+        event.clientX - rect.left, event.clientY - rect.top
+      );
+      if (!hit) return;
+      const p = hit.position;
+      const n = hit.normal;
+      const box = document.getElementById('coord-box');
+      box.style.display = 'block';
+      box.innerText =
+        'Copy these into MODEL_DATA in app.py:\\n\\n' +
+        'position: "' + p.x.toFixed(3) + ' ' + p.y.toFixed(3) + ' ' + p.z.toFixed(3) + '"\\n' +
+        'normal:   "' + n.x.toFixed(3) + ' ' + n.y.toFixed(3) + ' ' + n.z.toFixed(3) + '"';
+    }});
   }}
 </script>
 """
 
-components.html(html, height=650, scrolling=False)
+components.html(html, height=780, scrolling=True)
+
+# ---------------------------------------------------------------
+# 6. FORM TO ADD A NEW HOTSPOT (no code editing needed)
+# ---------------------------------------------------------------
+st.divider()
+st.subheader("➕ Add a hotspot")
+st.caption(
+    "Turn on Placement mode above, click the spot on the model, then "
+    "copy the position/normal numbers it shows into the boxes below."
+)
+
+with st.form("add_hotspot_form", clear_on_submit=True):
+    new_name = st.text_input("Part name (e.g. Charging Port)")
+    new_explanation = st.text_area(
+        "Explanation (material, function, whatever you want to say about it)"
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        pos_x = st.number_input("Position X", value=0.0, format="%.3f")
+        pos_y = st.number_input("Position Y", value=0.0, format="%.3f")
+        pos_z = st.number_input("Position Z", value=0.0, format="%.3f")
+    with col2:
+        norm_x = st.number_input("Normal X", value=0.0, format="%.3f")
+        norm_y = st.number_input("Normal Y", value=1.0, format="%.3f")
+        norm_z = st.number_input("Normal Z", value=0.0, format="%.3f")
+
+    submitted = st.form_submit_button("Add Hotspot")
+    if submitted:
+        if not new_name.strip():
+            st.warning("Give the part a name first.")
+        else:
+            st.session_state.custom_hotspots[model_choice][new_name.strip()] = {
+                "position": f"{pos_x} {pos_y} {pos_z}",
+                "normal": f"{norm_x} {norm_y} {norm_z}",
+                "explanation": new_explanation.strip() or "No explanation added yet.",
+            }
+            st.success(f"Added '{new_name.strip()}' — scroll up to see it on the model.")
+            st.rerun()
+
+if st.session_state.custom_hotspots[model_choice]:
+    st.caption("Hotspots you've added so far:")
+    for name in st.session_state.custom_hotspots[model_choice]:
+        c1, c2 = st.columns([5, 1])
+        c1.write(f"• {name}")
+        if c2.button("Remove", key=f"remove_{model_choice}_{name}"):
+            del st.session_state.custom_hotspots[model_choice][name]
+            st.rerun()
