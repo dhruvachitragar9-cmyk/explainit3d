@@ -3,16 +3,14 @@ ExplainIt3D — Interactive 3D Model Viewer with Part Annotations
 
 Rotate a 3D model in the browser (it also spins slowly on its own),
 tap the labeled dots on it, and see detailed information about that
-part (material, function, notes) — with a highlight/zoom effect,
-voice narration, dark/light theme, a sidebar part list, an "explode"
-view, a reset-camera button, and PDF export of the part info.
+part. Includes a sidebar part list, explode/reset buttons, a hotspot
+manager (edit + delete), file upload preview and PDF export.
 """
 
 import streamlit as st
 import streamlit.components.v1 as components
 import json
 import base64
-import io
 
 try:
     from fpdf import FPDF
@@ -87,7 +85,6 @@ MODEL_DATA = {
 # ---------------------------------------------------------------
 st.set_page_config(page_title="ExplainIt3D", layout="wide")
 
-# --- Trim Streamlit's default top padding ---
 st.markdown(
     """
     <style>
@@ -100,18 +97,10 @@ st.markdown(
 # --- Session state defaults ---
 if "custom_hotspots" not in st.session_state:
     st.session_state.custom_hotspots = {}
-if "scale_notes" not in st.session_state:
-    st.session_state.scale_notes = {}
-if "theme" not in st.session_state:
-    st.session_state.theme = "Dark"
+if "hidden_builtin" not in st.session_state:
+    st.session_state.hidden_builtin = {}
 if "selected_hotspot" not in st.session_state:
     st.session_state.selected_hotspot = None
-
-# --- Sidebar: theme + part list ---
-st.sidebar.header("⚙️ Settings")
-st.session_state.theme = st.sidebar.radio(
-    "Theme", ["Dark", "Light"], index=0 if st.session_state.theme == "Dark" else 1
-)
 
 st.title("🔍 ExplainIt3D")
 st.caption("Rotate the model, tap a labeled point, and see the details.")
@@ -132,9 +121,48 @@ else:
     model_url = SAMPLE_MODELS[model_choice]
 
 st.session_state.custom_hotspots.setdefault(model_choice, {})
-built_in = MODEL_DATA.get(model_choice, {})
+st.session_state.hidden_builtin.setdefault(model_choice, set())
+
+hidden = st.session_state.hidden_builtin[model_choice]
+built_in = {
+    k: v for k, v in MODEL_DATA.get(model_choice, {}).items() if k not in hidden
+}
 custom = st.session_state.custom_hotspots[model_choice]
 parts = {**built_in, **custom}
+
+
+def remove_part(part_name):
+    """Delete a hotspot — built-in ones get hidden, custom ones get removed."""
+    if part_name in custom:
+        del custom[part_name]
+    if part_name in MODEL_DATA.get(model_choice, {}):
+        hidden.add(part_name)
+
+
+def part_as_text(d):
+    if "explanation" in d:
+        return d["explanation"]
+    return (
+        f"Material: {d['material']}\n"
+        f"Function: {d['function']}\n"
+        f"Notes: {d['notes']}"
+    )
+
+
+def parse_coords(text):
+    """Turn '0.1 0.2 0.3 0 1 0' into (position, normal) strings, or None."""
+    nums = text.replace(",", " ").split()
+    if len(nums) != 6:
+        return None
+    try:
+        nums = [float(n) for n in nums]
+    except ValueError:
+        return None
+    return (
+        f"{nums[0]} {nums[1]} {nums[2]}",
+        f"{nums[3]} {nums[4]} {nums[5]}",
+    )
+
 
 # --- Sidebar part list (click to jump straight to a part's info) ---
 st.sidebar.header("🧩 Parts")
@@ -145,25 +173,12 @@ if parts:
 else:
     st.sidebar.caption("No parts added for this model yet.")
 
-# --- Optional real-world size note ---
-scale_note = st.text_input(
-    "Real-world size (optional, shown under the title)",
-    value=st.session_state.scale_notes.get(model_choice, ""),
-    key=f"scale_{model_choice}",
-)
-st.session_state.scale_notes[model_choice] = scale_note
-if scale_note:
-    st.caption(f"📏 {scale_note}")
-
 find_mode = st.checkbox(
     "🎯 Placement mode — click the model, the coordinates auto-copy to your clipboard"
 )
 
 if not parts:
-    st.info(
-        "No hotspots are set up for this model yet — add one below, or "
-        "add entries to MODEL_DATA in app.py."
-    )
+    st.info("No hotspots on this model yet — add one below.")
 
 # ---------------------------------------------------------------
 # 4. BUILD THE HOTSPOT BUTTONS + INFO DATA
@@ -195,34 +210,20 @@ initial_selected = (
     st.session_state.selected_hotspot if st.session_state.selected_hotspot in parts else ""
 )
 
-# --- Theme colors ---
-if st.session_state.theme == "Dark":
-    bg = "#15181f"
-    panel_bg = "#1e2530"
-    panel_text = "#eee"
-    viewer_bg = "#20242c"
-else:
-    bg = "#ffffff"
-    panel_bg = "#f0f0f3"
-    panel_text = "#1a1a1a"
-    viewer_bg = "#fafafa"
-
 # ---------------------------------------------------------------
 # 5. THE FULL EMBEDDED PAGE
 # ---------------------------------------------------------------
 html = f"""
 <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
 <style>
-  body {{ margin: 0; font-family: sans-serif; background: {bg}; }}
+  body {{ margin: 0; font-family: sans-serif; background: #15181f; }}
   .viewer-wrap {{ position: relative; }}
   model-viewer {{
     width: 100%;
     height: 420px;
-    background-color: {viewer_bg};
+    background-color: #20242c;
     border-radius: 8px;
-    cursor: grab;
   }}
-  model-viewer:active {{ cursor: grabbing; }}
   .Hotspot {{
     width: 22px;
     height: 22px;
@@ -240,8 +241,8 @@ html = f"""
     margin-bottom: 10px;
     padding: 16px 20px;
     border-radius: 8px;
-    background: {panel_bg};
-    color: {panel_text};
+    background: #1e2530;
+    color: #eee;
     font-size: 15px;
     line-height: 1.6;
     min-height: 90px;
@@ -282,11 +283,11 @@ html = f"""
     display: flex;
     align-items: center;
     justify-content: center;
-    background: {viewer_bg};
+    background: #20242c;
     border-radius: 8px;
     z-index: 4;
     flex-direction: column;
-    color: {panel_text};
+    color: #eee;
     font-size: 14px;
   }}
   .spinner {{
@@ -337,24 +338,13 @@ html = f"""
     document.getElementById('loading-overlay').style.display = 'none';
   }});
 
-  function speak(text) {{
-    try {{
-      const plain = text.replace(/<[^>]+>/g, ' ');
-      const utter = new SpeechSynthesisUtterance(plain);
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(utter);
-    }} catch (e) {{}}
-  }}
-
   function showInfo(name) {{
     const html = partInfo[name];
     const box = document.getElementById('info-box');
     if (!html) return;
     box.style.display = 'block';
     box.innerHTML = '<h3>📌 ' + name + '</h3>' + html;
-    speak(name + '. ' + html);
 
-    // Pulse the matching hotspot dot
     document.querySelectorAll('.Hotspot').forEach(h => {{
       if (h.getAttribute('data-name') === name) {{
         h.classList.add('pulse');
@@ -362,7 +352,6 @@ html = f"""
       }}
     }});
 
-    // Gently focus the camera toward that part
     const pos = partPositions[name];
     if (pos) {{
       const [x, y, z] = pos.split(' ');
@@ -411,7 +400,7 @@ html = f"""
 components.html(html, height=800, scrolling=True)
 
 # ---------------------------------------------------------------
-# 6. FORM TO ADD A NEW HOTSPOT (simplified — paste, don't type numbers)
+# 6. ADD A NEW HOTSPOT
 # ---------------------------------------------------------------
 st.divider()
 st.subheader("➕ Add a hotspot")
@@ -432,41 +421,74 @@ with st.form("add_hotspot_form", clear_on_submit=True):
     if submitted:
         if not new_name.strip():
             st.warning("Give the part a name first.")
+        elif new_name.strip() in parts:
+            st.warning("A hotspot with that name already exists — pick a different name.")
         else:
-            nums = pasted_coords.replace(",", " ").split()
-            if len(nums) != 6:
+            coords = parse_coords(pasted_coords)
+            if coords is None:
                 st.warning(
                     "Couldn't read 6 numbers from that paste — turn on "
                     "Placement mode, click the model again, and paste fresh."
                 )
             else:
-                try:
-                    nums = [float(n) for n in nums]
-                except ValueError:
-                    st.warning("Those don't look like valid numbers — try pasting again.")
-                    nums = None
-                if nums:
-                    position = f"{nums[0]} {nums[1]} {nums[2]}"
-                    normal = f"{nums[3]} {nums[4]} {nums[5]}"
-                    st.session_state.custom_hotspots[model_choice][new_name.strip()] = {
-                        "position": position,
-                        "normal": normal,
-                        "explanation": new_explanation.strip() or "No explanation added yet.",
-                    }
-                    st.success(f"Added '{new_name.strip()}' — scroll up to see it on the model.")
-                    st.rerun()
+                custom[new_name.strip()] = {
+                    "position": coords[0],
+                    "normal": coords[1],
+                    "explanation": new_explanation.strip() or "No explanation added yet.",
+                }
+                st.rerun()
 
-if st.session_state.custom_hotspots[model_choice]:
-    st.caption("Hotspots you've added so far:")
-    for name in st.session_state.custom_hotspots[model_choice]:
-        c1, c2 = st.columns([5, 1])
-        c1.write(f"• {name}")
-        if c2.button("Remove", key=f"remove_{model_choice}_{name}"):
-            del st.session_state.custom_hotspots[model_choice][name]
+# ---------------------------------------------------------------
+# 7. MANAGE HOTSPOTS (edit + delete)
+# ---------------------------------------------------------------
+st.divider()
+st.subheader("🛠️ Manage hotspots")
+st.caption(
+    "Open a hotspot to edit it or delete it. Changes last while the app "
+    "is open — refreshing the page resets to what's saved in app.py."
+)
+
+if not parts:
+    st.caption("Nothing to manage yet.")
+
+for pname, pdata in list(parts.items()):
+    with st.expander(pname):
+        with st.form(f"edit_{model_choice}_{pname}"):
+            edit_name = st.text_input("Name", value=pname)
+            edit_text = st.text_area("Explanation", value=part_as_text(pdata))
+            edit_coords = st.text_input(
+                "New coordinates (optional — paste 6 numbers to move the dot, leave blank to keep it where it is)"
+            )
+            save = st.form_submit_button("💾 Save changes")
+
+        if save:
+            new_nm = edit_name.strip()
+            if not new_nm:
+                st.warning("The name can't be empty.")
+            elif new_nm != pname and new_nm in parts:
+                st.warning("Another hotspot already has that name.")
+            else:
+                position, normal = pdata["position"], pdata["normal"]
+                if edit_coords.strip():
+                    coords = parse_coords(edit_coords)
+                    if coords is None:
+                        st.warning("Couldn't read 6 numbers from the coordinates — nothing was changed.")
+                        st.stop()
+                    position, normal = coords
+                remove_part(pname)
+                custom[new_nm] = {
+                    "position": position,
+                    "normal": normal,
+                    "explanation": edit_text.strip() or "No explanation added yet.",
+                }
+                st.rerun()
+
+        if st.button("🗑️ Delete this hotspot", key=f"del_{model_choice}_{pname}"):
+            remove_part(pname)
             st.rerun()
 
 # ---------------------------------------------------------------
-# 7. EXPORT PART INFO AS PDF
+# 8. EXPORT PART INFO AS PDF
 # ---------------------------------------------------------------
 st.divider()
 st.subheader("📄 Export")
@@ -477,13 +499,11 @@ elif not FPDF_AVAILABLE:
     st.caption("PDF export needs the 'fpdf2' package — add it to requirements.txt.")
 else:
     def pdf_safe(text):
-        # The built-in PDF font only supports a limited character set —
-        # swap anything it can't render instead of crashing.
         return (
             str(text)
-            .replace("—", "-").replace("–", "-")
-            .replace(""", '"').replace(""", '"')
-            .replace("'", "'").replace("'", "'")
+            .replace("\u2014", "-").replace("\u2013", "-")
+            .replace("\u201c", '"').replace("\u201d", '"')
+            .replace("\u2018", "'").replace("\u2019", "'")
             .encode("latin-1", "replace").decode("latin-1")
         )
 
@@ -492,32 +512,18 @@ else:
         pdf.add_page()
         pdf.set_font("Helvetica", "B", 18)
         pdf.cell(0, 12, pdf_safe(f"ExplainIt3D - {model_choice}"), new_x="LMARGIN", new_y="NEXT")
-        if scale_note:
-            pdf.set_font("Helvetica", "", 11)
-            pdf.cell(0, 8, pdf_safe(f"Size: {scale_note}"), new_x="LMARGIN", new_y="NEXT")
         pdf.ln(4)
 
         for name, d in parts.items():
             pdf.set_font("Helvetica", "B", 14)
             pdf.cell(0, 10, pdf_safe(name), new_x="LMARGIN", new_y="NEXT")
             pdf.set_font("Helvetica", "", 11)
-            if "explanation" in d:
-                pdf.multi_cell(0, 7, pdf_safe(d["explanation"]))
-            else:
-                pdf.multi_cell(
-                    0, 7,
-                    pdf_safe(
-                        f"Material: {d['material']}\n"
-                        f"Function: {d['function']}\n"
-                        f"Notes: {d['notes']}"
-                    )
-                )
+            pdf.multi_cell(0, 7, pdf_safe(part_as_text(d)))
             pdf.ln(3)
 
-        pdf_bytes = bytes(pdf.output())
         st.download_button(
             "⬇️ Click to save the PDF",
-            data=pdf_bytes,
+            data=bytes(pdf.output()),
             file_name=f"{model_choice.replace(' ', '_')}_parts.pdf",
             mime="application/pdf",
         )
